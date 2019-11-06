@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ObjectDetectionDemo</string>
+    <string name="description_info">tflite object detection</string>
+    <string name="request_permission">This app needs camera permission.</string>
+</resources>
