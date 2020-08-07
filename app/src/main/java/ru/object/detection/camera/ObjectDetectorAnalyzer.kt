@@ -12,6 +12,7 @@ import androidx.camera.core.ImageProxy
 import ru.`object`.detection.detection.DetectionResult
 import ru.`object`.detection.detection.ObjectDetector
 import ru.`object`.detection.util.ImageUtil
+import ru.`object`.detection.util.YuvToRgbConverter
 import java.util.concurrent.atomic.AtomicInteger
 
 class ObjectDetectorAnalyzer(
@@ -22,6 +23,7 @@ class ObjectDetectorAnalyzer(
 
     companion object {
         private const val TAG = "ObjectDetectorAnalyzer"
+        private val DEBUG = false
     }
 
     private val iterationCounter = AtomicInteger(0)
@@ -33,9 +35,9 @@ class ObjectDetectorAnalyzer(
             resultWidth = config.inputSize
     )
 
-    private val uiHandler = Handler(Looper.getMainLooper())
+    private val yuvToRgbConverter = YuvToRgbConverter(context)
 
-    private var rgbArray: IntArray? = null
+    private val uiHandler = Handler(Looper.getMainLooper())
 
     private var inputArray = IntArray(config.inputSize * config.inputSize)
 
@@ -46,17 +48,18 @@ class ObjectDetectorAnalyzer(
 
     private var matrixToInput: Matrix? = null
 
-    override fun analyze(
-            image: ImageProxy,
-            rotationDegrees: Int
-    ) {
+    override fun analyze(image: ImageProxy) {
+        val rotationDegrees = image.imageInfo.rotationDegrees
+
         val iteration = iterationCounter.getAndIncrement()
 
-        val rgbArray = convertYuvToRgb(image)
+        val rgbBitmap = getArgbBitmap(image.width, image.height)
 
-        val rgbBitmap = getRgbBitmap(rgbArray, image.width, image.height)
+        yuvToRgbConverter.yuvToRgb(image, rgbBitmap)
 
         val transformation = getTransformation(rotationDegrees, image.width, image.height)
+
+        image.close()
 
         Canvas(resizedBitmap).drawBitmap(rgbBitmap, transformation, null)
 
@@ -64,7 +67,9 @@ class ObjectDetectorAnalyzer(
 
         val objects = detect(inputArray)
 
-        debugHelper.saveResult(iteration, resizedBitmap, objects)
+        if (DEBUG) {
+            debugHelper.saveResult(iteration, resizedBitmap, objects)
+        }
 
         Log.d(TAG, "detection objects($iteration): $objects")
 
@@ -74,6 +79,8 @@ class ObjectDetectorAnalyzer(
                 imageHeight = config.inputSize,
                 imageRotationDegrees = rotationDegrees
         )
+
+
 
         uiHandler.post {
             onDetectionResult.invoke(result)
@@ -89,26 +96,13 @@ class ObjectDetectorAnalyzer(
         return toInput
     }
 
-    private fun getRgbBitmap(pixels: IntArray, width: Int, height: Int): Bitmap {
+    private fun getArgbBitmap(width: Int, height: Int): Bitmap {
         var bitmap = rgbBitmap
         if (bitmap == null) {
             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) as Bitmap
             rgbBitmap = bitmap
         }
-
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-
         return bitmap
-    }
-
-    private fun convertYuvToRgb(image: ImageProxy): IntArray {
-        var array = rgbArray
-        if (array == null) {
-            array = IntArray(image.width * image.height)
-            rgbArray = array
-        }
-        ImageUtil.convertYuvToRgb(image, array)
-        return array
     }
 
     private fun detect(inputArray: IntArray): List<DetectionResult> {

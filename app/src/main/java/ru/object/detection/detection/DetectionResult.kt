@@ -9,6 +9,6 @@ data class DetectionResult(
         val location: RectF
 ) {
     val text: String by lazy {
-        "$id:$title<$confidence>"
+        "$id:$title[${"%.2f".format(confidence)}]"
     }
 }

@@ -1,21 +1,30 @@
 package ru.`object`.detection
 
 import android.os.Bundle
-import android.view.TextureView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.*
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.android.synthetic.main.activity_object_recognition.*
 import org.tensorflow.lite.examples.detection.R
-import ru.`object`.detection.camera.CameraPermissionHelper
+import ru.`object`.detection.camera.CameraPermissionsResolver
 import ru.`object`.detection.camera.ObjectDetectorAnalyzer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class ObjectRecognitionActivity : AppCompatActivity() {
 
-    private lateinit var cameraPreview: TextureView
+    private lateinit var previewView: PreviewView
 
     private lateinit var executor: ExecutorService
+
+    private val cameraPermissionsResolver = CameraPermissionsResolver(this)
 
     private val objectDetectorConfig = ObjectDetectorAnalyzer.Config(
             minimumConfidence = 0.5f,
@@ -26,16 +35,19 @@ class ObjectRecognitionActivity : AppCompatActivity() {
             labelsFile = "labelmap.txt"
     )
 
-    private val cameraPermissionHelper = CameraPermissionHelper(this)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_object_recognition)
         executor = Executors.newSingleThreadExecutor()
 
-        cameraPreview = findViewById(R.id.camera_view)
+        previewView = findViewById(R.id.preview_view)
 
-        cameraPermissionHelper.doIfHaveCameraPermission(::startCamera)
+        cameraPermissionsResolver.checkAndRequestPermissionsIfNeeded(
+                onSuccess = {
+                    getProcessCameraProvider(::bindCamera)
+                },
+                onFail = ::showSnackbar
+        )
     }
 
     override fun onDestroy() {
@@ -43,39 +55,50 @@ class ObjectRecognitionActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    override fun onStart() {
-        cameraPermissionHelper.requestCameraPermissionIfDontHas(onNoPermission = CameraX::unbindAll)
-        super.onStart()
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        cameraPermissionHelper.onRequestPermissionsResult(requestCode, permissions, grantResults, onHasPermission = ::startCamera)
-    }
-
-    private fun startCamera() {
-        val analyzerConfig = ImageAnalysisConfig.Builder().apply {
-            setImageReaderMode(ImageAnalysis.ImageReaderMode.ACQUIRE_LATEST_IMAGE)
-        }.build()
-        val analyzerUseCase = ImageAnalysis(analyzerConfig).apply {
-            setAnalyzer(executor, ObjectDetectorAnalyzer(applicationContext, objectDetectorConfig, ::onDetectionResult))
-        }
-
-        val previewConfig = PreviewConfig.Builder()
-                .setLensFacing(CameraX.LensFacing.BACK)
+    private fun bindCamera(cameraProvider: ProcessCameraProvider) {
+        val preview = Preview.Builder()
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .build()
-        val preview = Preview(previewConfig)
 
-        preview.setOnPreviewOutputUpdateListener { previewOutput ->
-            cameraPreview.surfaceTexture = previewOutput.surfaceTexture
-        }
+        val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
 
-        CameraX.bindToLifecycle(this, preview, analyzerUseCase)
+        imageAnalysis.setAnalyzer(
+                executor,
+                ObjectDetectorAnalyzer(applicationContext, objectDetectorConfig, ::onDetectionResult)
+        )
+
+        val cameraSelector = CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                .build()
+
+        cameraProvider.unbindAll()
+
+        cameraProvider.bindToLifecycle(
+                this,
+                cameraSelector,
+                imageAnalysis,
+                preview
+        )
+
+        preview.setSurfaceProvider(previewView.createSurfaceProvider())
+    }
+
+    private fun getProcessCameraProvider(onDone: (ProcessCameraProvider) -> Unit) {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener(
+                Runnable { onDone.invoke(cameraProviderFuture.get()) },
+                ContextCompat.getMainExecutor(this)
+        )
     }
 
     private fun onDetectionResult(result: ObjectDetectorAnalyzer.Result) {
         result_overlay.updateResults(result)
+    }
+
+    private fun showSnackbar(message: String) {
+        Snackbar.make(root_container, message, Snackbar.LENGTH_LONG).show()
     }
 
 }
